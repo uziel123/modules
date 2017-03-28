@@ -1,547 +1,227 @@
-
-
 #!/usr/bin/python
-# -*- coding: iso8859_2 -*-
-#===============================================================================
-#
-# USAGE:        picofu.py -f <fw_file> [ -v | -h | -s | -p serial | --force ] 
-#
-# DESCRIPTION:
-#               This script uploads firmware to UPS PIco. Only mandatory input is new UPS PIco firmware.   
-#
-# RETURN CODES:
-#               0 - Sucessfull update   
-#               1 - Failed to parse command line arguments   
-#               2 - Failed to establish communication with the UPS PIco   
-#               3 - Incompatible UPS PIco powering mode (DISABLED FOR NOW)   
-#               4 - Failed to validate firmware file   
-#               5 - Failed during the FW upload   
-#
-# OPTIONS:      ---
-# REQUIREMENTS: 
-#               python-serial
-#               python-smbus
-#               Propoer HW setup and setup of Pi to enable Serial/I2C communication based on the UPS PIco manual
-# BUGS:         ---
-# NOTES:        Updated for the UPS PIco by www.pimodules.com
-# AUTHOR:       Vit SAFAR <PIco@safar.info> 
-# VERSION:      1.4 adopted for UPS PIco December 2014 by PiModules
-# CREATED:      2.6.2014
-# REVISION: 
-#	              v1.0  16.4.2014 - Vit SAFAR
-#                 - Initial release
-#	              v1.1  17.4.2014 - Vit SAFAR
-#                 - Added code documentation
-#                 - Some speed-up optimisations    
-#	              v1.2  19.4.2014 - Vit SAFAR
-#                 - Disabled the power detection, until automatic switch to bootloader mode is enabled
-#	              v1.3  2.6.2014 - Vit SAFAR
-#                 - Fixed communication issue by adding dummy ';HELLO' command 
-#
-# TODO:         - Detect FW version
-#               - Automatic switch to bootloader mode using @command when available
-#               - Automatically enable of the I2C sw components in Pi (load kernel modules) if not done 
-#               - Perform optimisation of the FW file to speed up the upload process     
-#               - Make the switch to bootloader mode interactive for users who does not have the I2C interface available.
-#               - Show UPS PIco @status after firmware update 
-#               - Detect progress of the factory reset, not just wait :)
-#               - Set UPS PIco RTC clock after factory reset to the system time
-#
-#===============================================================================
-import sys
-import time
-import datetime
-import os
-import re     
-import getopt
+
+#####################################################################################
+# pico_status_hv3.0.py
+# updated: 20-01-2017
+# Script to show you some statistics pulled from your UPS PIco HV3.0A
+
+#####################################################################################
+# SETTINGS
+#####################################################################################
+
+# Set your desired temperature symbol
+# C = Celsius
+# F = Fahrenheit
+degrees = "F"
+
+#####################################################################################
+# It's not necessary to edit anything below this line unless your knowing what to do!
+#####################################################################################
 
 import smbus
 import time
 import datetime
 
-# You can install psutil using: sudo pip install psutil
-#import psutil
-
 i2c = smbus.SMBus(1)
-  
-class FWUpdate(object):
-  """ 
-    Only class performing the FW update 
-    The class performs following tasks
-      1) Check the command line arguments and performs validation of the expected/required parameters
-      2) Pereform detection of the Pi powering scheme via I2C or Serial interface 
-      3) Perform validation of the FW file
-      4) Verify the connectivity to UPS PIco bootloader is working
-      5) Perform FW update
-      6) Perform UPS PIco factory reset
-  
-  """
 
-  # running in verbose mode
-  verbose=False
-  # force the FW update by skipping prechecks
-  force=False
-  # skip validation of the FW
-  skip=False
-  # firmware file
-  filename=False 
-  # default serial port
-  port='/dev/ttyAMA0'
-  # serial connection established on bloader level
-  seria_bloader=False
-  # status of the i2c serial feature
-  i2c=False
-  # detected i2c bus  
-  i2c_bus=False
-  # default I2C port of UPS PIco control interface
-  i2c_port=0x69
-  # is Pi powered via Pi or not
-  power=False
-  # if power not via Pi USB and already warned about via Pi powering requirement
-  power_warned=False
+def fw_version():
+   time.sleep(0.1)
+   data = i2c.read_byte_data(0x69, 0x26)
+   data = format(data,"02x")
+   return data
 
+def boot_version():
+   time.sleep(0.1)
+   data = i2c.read_byte_data(0x69, 0x25)
+   data = format(data,"02x")
+   return data
 
-  def __init__(self):
-  
-    # check if smbus module is deployed and load it if possible
-    try:
-      import smbus
-      self.i2c=True
-      self.smbus=smbus
-    except:
-      print 'WARNING: I2C support is missing. Please install smbus support for python to enable additional functionality! (sudo apt-get install python-smbus)'
-      self.i2c=False
+def pcb_version():
+   time.sleep(0.1)
+   data = i2c.read_byte_data(0x69, 0x24)
+   data = format(data,"02x")
+   return data
 
-    # check if pyserial module is deployed and load it if possible
-    try:
-      import serial
-      self.serial=serial
-    except:
-      print 'ERROR: Serial support is missing. Please install pyserial support for python to enable additional functionality! (sudo apt-get install python-serial)'
-      sys.exit(2)
-      
-    # parse command line arguments
-    try:
-    	opts, args = getopt.getopt(sys.argv[1:], 'vhf:sp:', ['help', 'force' ])
-    except getopt.GetoptError, err:
-      # print help information and exit:
-      print str(err) # will print something like "option -a not recognized"
-      self.usage()
-      sys.exit(1)
-    for o, a in opts:
-      # look for verbose argument
-      if o =="-v":
-        self.verbose = True
-      # look for help argument
-      elif o in ("-h", "--help"):
-        self.usage()
-        sys.exit(1)
-      # look for fw filename argument
-      elif o == "-f":
-        self.filename = a
-        # Check if fw filename really exists
-        if not os.path.isfile(self.filename):
-          print 'ERROR: Input file "'+str(self.filename)+'" cannot be found! Make sure file exists and is readable.'
-          sys.exit(1)
-      # look for force argument
-      elif o == "--force":
-        self.force = True
-      # look for fw validation skip argument
-      elif o == "-s":
-        self.skip = True
-      # look for serial port definition argument
-      elif o == "-p":
-        self.port = a
-        if not os.path.exists(self.port):
-          print 'ERROR: Serial port "'+str(self.port)+'" cannot be found! No need to change this value in most of the cases!'
-          sys.exit(1)
-      # in case of unknown argument
-      else:
-        assert False, "ERROR: Unknown option"
-        sys.exit(1)
+def pwr_mode():
+   data = i2c.read_byte_data(0x69, 0x00)
+   data = data & ~(1 << 7)
+   if (data == 1):
+      return "RPi POWERED"
+   elif (data == 2):
+      return "BAT POWERED"
+   else:
+      return "ERROR"
 
-    # Check if serial port device exists
-    if not os.path.exists(self.port):
-      print 'ERROR: Serial port "'+str(self.port)+'" cannot be found!'
-      sys.exit(1)
-  
-    # Check if fw filename is defined 
-    if not self.filename:
-      print 'ERROR: Firmware filename has to be defined! :)'
-      sys.exit(1)
-      
-    # check the powering option is ok
-    ####self.power_detect()
-        
-    # validsate the provided firmware file
-    if not self.skip:
-      self.validate()
-    else:
-      if self.verbose: print 'WARNING: Skipping firmware validation'
-    
-    # verify bootloader connectivity
-    self.serial_check()
-    
-    # launch FW upload
-    self.fw_upload()
-    
-    # Execute factory reset of UPS PIco
-    self.factory_reset()
+def bat_version():
+   time.sleep(0.1)
+   data = i2c.read_byte_data(0x6b, 0x07)
+   if (data == 0x46):
+      return "LiFePO4 (ASCII : F)"
+   elif (data == 0x51):
+      return "LiFePO4 (ASCII : Q)"
+   elif (data == 0x53):
+      return "LiPO (ASCII: S)"
+   elif (data == 0x50):
+      return "LiPO (ASCII: P)"
+   else:
+      return "ERROR"
 
-  """
-  2) Detects the powering status of the Pi
-    a) Check the power status via I2C bus 0 and 1 (most common way to do it in the future?)
-    b) In case that no answer found (yes or no), check via serial port. 
-      - We expect to have serial port in the bootloader mode at this time, so @command on serial interface is not available and it will fail in most of the cases
-        
-  """
-  def power_detect(self):
-    if self.verbose: print 'INFO: Detecting power setup'
+def bat_runtime():
+   time.sleep(0.1)
+   data = i2c.read_byte_data(0x6b, 0x01) + 1
+   if (data == 0x100):
+      return "TIMER DISABLED"
+   elif (data == 0xff):
+      return "TIMER DISABLED"
+   else:
+      data = str(data)+ " MIN"
+      return data
 
-    # check if the system is powered via Pi USB connector  
-    if self.i2c:
-      # it's I2C we expect somthing to go wrong :)
-      try:
-        if self.verbose: print 'INFO: Probing I2C bus 0'
-        # open connection to the first I2C bus (applicable mainly for the Rev.1 Pi boards)
-        bus = self.smbus.SMBus(0)
-        # read the powering systus byte (reffer to the manual for the meaning)
-        pwr=bus.read_byte_data(0x6a,0)
-        # in case we got valid response (0 is not a vlid return value of this interface, so probably not connected :) )
-        if pwr>0:
-          self.i2c_bus=0
-          # if powered via Pi, than ok
-          if pwr==3:
-            if self.verbose: print 'INFO: (I2C bus 1) System is powered via the Pi USB port.'
-            self.power=True
-          # otherwise powered using unsupported mode...
-          # if forced to skip this check, lets do it :)
-          elif self.force:
-            print 'WARNING: (I2C-0) System is not powered via Pi USB port. There is a UPS PIco reset after a FW update, that would perform hard reset of Pi! (use --force to disable this check)'
-            self.power_warned=True
-          else:
-            print 'ERROR: (I2C-0) System has to be powered via the Pi USB port. There is a PIco reset after a FW update, that would perform hard reset of Pi! (use --force to disable this check)'
-            sys.exit(3)
-      except SystemExit as e:
-        sys.exit(e)      
-      except:
-        pass
-      if not self.power:
-        try:  
-          if self.verbose: print 'INFO: Probing I2C bus 1'
-          # open connection to the first I2C bus (applicable mainly for the Rev.2 Pi boards)
-          bus = self.smbus.SMBus(1)
-          # read the powering systus byte (reffer to the manual for the meaning)
-          pwr=bus.read_byte_data(0x6a,0)
-          # in case we got valid response (0 is not a vlid return value of this interface, so probably not connected :) )
-          if pwr>0:
-            self.i2c_bus=1
-            # if powered via Pi, than ok
-            if pwr==3:
-              if self.verbose: print 'INFO: (I2C bus 1) System is powered via the Pi USB port.'
-              self.power=True
-            # otherwise powered using unsupported mode...
-            # if forced to skip this check, lets do it :)
-            elif self.force:
-              print 'WARNING: (I2C-1) System is not powered via Pi USB port. There is a UPS PIco reset after a FW update, that would perform hard reset of Pi! (use --force to disable this check)'
-              self.power_warned=True
-            else:
-              print 'ERROR: (I2C-1) System has to be powered via the Pi USB port. There is a UPS PIco reset after a FW update, that would perform hard reset of Pi! (use --force to disable this check)'
-              sys.exit(3)
-        except SystemExit as e:
-          sys.exit(e)      
-        except:
-          pass
-    
-    # in case power status not ok and we have not detected wrong power status already, check via Serial as a failback method (even though it is expected to fail also due to the bootloader mode requirement) 
-    if not self.power and not self.power_warned:
-      if self.verbose: print 'INFO: Probing serial port'
-      # Set up the connection to the UPS PIco
-      PIco= self.serial.Serial(port=self.port,baudrate=9600,timeout=0.001,rtscts=0,xonxoff=True)
-      # empty the input buffer
-      for line in PIco:
-        pass
-      # get status of power via serial from PIco
-      PIco.write('@PM\r')
-      # wait for the answer
-      time.sleep(0.5)
-      # for each line in the output buffer (there are some newlines returned)
-      for line in PIco:
-        # get rid of the newline characters
-        line=line.strip()
-        # is it the answer we are looking for? (yep, should be regexp...)
-        if line[:16] == 'Powering Source:':    
-          # get the power source (yep, should be regexp...)
-          ret=line[16:20]
-          # in case it is RPI, everything is ok :)
-          if ret == 'RPI':
-            self.power=True
-            if self.verbose: print 'INFO: System is powered via the Pi USB port.'
-          # otherwise powered using unsupported mode...
-          # if forced to skip this check, lets do it :)
-          elif self.force:
-            if not self.power_warned:
-              print 'WARNING: (Serial) System is not powered via Pi USB port. There is a PIco reset after a FW update, that would perform hard reset of Pi! (use --force to disable this check)'
-              self.power_warned=True
-          else:
-            print 'ERROR: (Serial) System has to be powered via the Pi USB port. There is a PIco reset after a FW update, that would perform hard reset of Pi! (use --force to disable this check)'
-            sys.exit(3)
-      # close the connection to PIco via serial
-      PIco.close()
-              
-    #print 'pwr:',self.power,' pwrw:',self.power_warned,' pwr',self.power
-    # in case no power information gathered
-    if not self.power:
-      if self.force:
-        if not self.power_warned:
-          print 'WARNING: System powering mode not detected. There is a PIco reset after a FW update, that would perform hard reset of Pi! Use --force to disable this check.'
-      else:
-        print 'ERROR: System powering mode not detected. System has to be powered via the Pi USB port since here is a PIco reset after a FW update, that would perform hard reset of Pi! Make a proper HW/Pi setup of Serial interface or PiCo interface(I2C) to enable auto-detection. This can happen also in case that PIco is already in the bootload mode having PIco RED led lid. Use --force to disable this check.'
-        sys.exit(3)
-       
+def bat_level():
+   time.sleep(0.1)
+   data = i2c.read_word_data(0x69, 0x08)
+   data = format(data,"02x")
+   return (float(data) / 100)
 
-  """
-  3) Check that there is a PIco bootloader connected to the other side of the serial interface :)
-    - Send dummy command and get the confirmation from the bootloader
-        
-  """
-  def serial_check(self):
-    print "Checking communication with bootloader:",
-    status=False
-    try:
-      # Set up the connection to the PIco
-      PIco = self.serial.Serial(port=self.port,baudrate=9600,timeout=0.001,rtscts=0,xonxoff=True)
-      # empty the input buffer
-      for line in PIco:
-        pass
-      # send dummy command
-      PIco.write(":020000040000FA\r")
-    except:
-      print "KO\nERROR: Unable to establish communication with PIco bootloader via port:",self.port,'Please verify that the serial port is availble.'
-      sys.exit(2)
-    try:
-      # set the wait iterations for the bootloader response
-      rcnt=1000
-      # loop and wait for the response
-      while rcnt>0:
-        # in case there is something waiting on the serial line
-        for resp in PIco:
-          # get rid of the nwlines
-          resp=resp.strip()
-          # check if the response is the expected value or not :)
-          if ord(resp[0])==6:
-            print "OK"
-            status=True
-            rcnt=1
-          else:
-            print "KO\nERROR: Invalid response from PIco:",ord(resp[0])," Please retry the FW upload process."
-            sys.exit(2)
-          break
-        rcnt-=1
-        if (rcnt==1000):
-           # Retry to send dummy command
-           PIco.write(":020000040000FA\r")
-    except:
-      print "KO\nERROR: Something wrong happened during verification of communication channel with PIco bootloader via port:",self.port,'Please verify that the serial port is availble and not used by some other application.'
-      sys.exit(2)
-      
-    # in case communication not verified
-    if not status:
-      if self.force:
-        print "KO\nWARNING: Unable to verify communication with bootloader in PIco. Is the PIco in the bootloader mode? (Red LED lid on PIco)"      
-      else:
-        print "KO\nERROR: Failed to establish communication with bootloader in PIco. Is the PIco in the bootloader mode? (Red LED lid on PIco)"
-        sys.exit(2)
-    # close the channel to PIco
-    PIco.close()
+def bat_percentage():
+   time.sleep(0.1)
+   datavolts = bat_level()
+   databattery = bat_version()
+   if (databattery == "LiFePO4 (ASCII : F)") or (databattery == "LiFePO4 (ASCII : Q)"):
+      datapercentage = ((datavolts-2.9)/0.8)*100
 
+   elif (databattery == "LiPO (ASCII: S)") or (databattery == "LiPO (ASCII: P)"):
+      datapercentage = ((datavolts-3.4)/0.75)*100
+   return datapercentage
 
-  """
-  4) Verify the content of the provided FW file by:
-        a) validating crc
-        b) validating format
-        c) validating passed data syntax
-  """
-  def validate(self):
-    print "Validating firmware:",
-    valid=False
-    #count number of lines
-    lnum=1
-    # open the FW file
-    f = open(self.filename)
-    # for each file line
-    for line in f:
-      #static  LEN ADDR1 ADDR2 TYPE  DATA     CKSUM
-      #:       04  05    00    00    50EF2EF0 9A
-      # parse the line
-      target = re.match( r"^:([a-fA-F0-9]{2})([a-fA-F0-9]{2})([a-fA-F0-9]{2})([a-fA-F0-9]{2})([a-fA-F0-9]*)([a-fA-F0-9]{2}).$", line, re.M|re.I|re.DOTALL)
-      # in case the data field does not have correct size
-      if len(target.group(5))%2!=0:
-        print "KO\nLine",lnum,': Invalid bytecode message!'
-        sys.exit(4)
-      # get the CRC valucalculate CRC
-      crc1=int(line[-4:-1],16)
-      # calculate the CRC value of the data read
-      crc2=0    
-      for i in range(1, len(line)-5, 2):
-        #print line[i:i+2] 
-        crc2+=int(line[i:i+2],16)
-      # python cannot simulate byte overruns, so ugly math to be done 
-      crc2%=256
-      crc2=255-crc2+1
-      crc2%=256
-      # validate the CRC :)
-      if crc1!=crc2:
-        print "KO\nLine",lnum,': Invalid bytecode checksum! Defined:', crc1,'Calculated:', crc2
-        sys.exit(4)
-        
-      # in case that the done command is detected, than finish
-      if target.group(4)=='01':
-         valid=True
-         break
-      lnum+=1
-    # close the FW file
-    f.close()
-    if not valid:
-      print "KO\n Termination signature not found in the firmware file."
-      sys.exit(4)
-    else:
-      print 'OK'
+def rpi_level():
+   time.sleep(0.1)
+   data = i2c.read_word_data(0x69, 0x0a)
+   data = format(data,"02x")
+   return (float(data) / 100)
 
+def ntc1_temp():
+   time.sleep(0.1)
+   data = i2c.read_byte_data(0x69, 0x1b)
+   data = format(data,"02x")
+   if (degrees == "C"):
+      return data
+   elif (degrees == "F"):
+      return (float(data) * 9 / 5) + 32
 
+def to92_temp():
+   time.sleep(0.1)
+   data = i2c.read_byte_data(0x69, 0x1C)
+   data = format(data,"02x")
+   if (degrees == "C"):
+      return data
+   elif (degrees == "F"):
+      return (float(data) * 9 / 5) + 32
 
+def epr_read():
+   time.sleep(0.1)
+   data = i2c.read_word_data(0x69, 0x0c)
+   data = format(data,"02x")
+   return (float(data) / 100)
 
-  """
-  5) Upload the FW to PIco
-        
-  """
-  def fw_upload(self):
-    print "Uploading firmware: 0% ",
-    # count the number fo lines in the file for the progress bar
-    with open(self.filename) as f:
-      lnum=len(list(f))
+def ad2_read():
+   time.sleep(0.1)
+   data = i2c.read_word_data(0x69, 0x14)
+   data = format(data,"02x")
+   return (float(data) / 100)
+   
+def fan_mode():
+   time.sleep(0.1)
+   data = i2c.read_byte_data(0x6b, 0x11)
+   data = data & ~(1 << 2)
+   if (data == 1):
+      return "ENABLED"
+   elif (data == 0):
+      return "DISABLED"
+   elif (data == 2):
+     return "AUTOMATIC"
+   else:
+      return "ERROR"
 
-    # open the FW file
-    f = open(self.filename)
-    # Set up the connection to the PIco
-    PIco = self.serial.Serial(port=self.port,baudrate=9600,timeout=0.001,rtscts=0,xonxoff=True)
-    # empty the input buffer
-    for line in PIco:
-      pass
-    status=False
-    # send the data to PIco
-    PIco.write(";HELLO\r")
-    rcnt=100
-    # loop and wait for the response
-    while rcnt>0:
-      # in case there is something waiting on the serial line
-      for resp in PIco:
-        # get rid of the nwlines
-        resp=resp.strip()
-        # check if the response is the expected value or not :)
-        if ord(resp[0])==6:
-          #print "Response OK:",ord(resp)
-          status=True
-          rcnt=1
-        else:
-          print "KO\nERROR: Invalid status word from PIco (",ord(resp),') when processing initial line! Please retry the FW upload process.'
-          sys.exit(5)
-        break
-      rcnt-=1
-    if not status:
-      print "KO\nERROR: No status word from PIco revcieved when processing initial line! Please check possible warnings above and retry the FW upload process."
-      sys.exit(5)
+def fttemp():
+   time.sleep(0.1)
+   data = i2c.read_byte_data(0x6b, 0x14)
+   data = format(data,"02x")
+   return data
 
-    # calculate 5% progress bar step
-    lnumx=lnum/100*5
-    # count the processed lines
-    lnum2=1
+def fan_state():
+   time.sleep(0.1)
+   data = i2c.read_byte_data(0x6b, 0x13)
+   data = data & ~(1 << 2)
+   if (data == 1):
+      return "ON"
+   elif (data == 0):
+      return "OFF"
+   else:
+      return "ERROR"
 
-    # for each line in the FW file
-    for line in f:
-      status=False
-      # strp the \r\n and add only \r 
-      line=line.strip()+"\r"
-      # send the data to PIco
-      PIco.write(line)
-      #print "Written:",line
-      
+def fan_speed():
+   time.sleep(0.1)
+   data = i2c.read_word_data(0x6b, 0x12)
+   data = format(data,"02x")
+   return int(data, 16)
 
-      # set the wait iterations for the bootloader response
-      rcnt=1000
-      lrcnt=0
-      # loop and wait for the response
-      while rcnt>0:
-        # in case there is something waiting on the serial line
-        for resp in PIco:
-          # get rid of the nwlines
-          resp=resp.strip()
-          # check if the response is the expected value or not :)
-          if ord(resp[0])==6:
-            #print "Response OK:",ord(resp)
-            #print "Waited:",rcnt
-            status=True
-            lrcnt=rcnt
-            rcnt=1
-          else:
-            print "KO\nERROR: Invalid status word from PIco (",ord(resp),') when processing line',lnum2,' Please retry the FW upload process.'
-            sys.exit(5)
-          break
-        rcnt-=1
-      if not status:
-        print "KO\nERROR: No status word from PIco revcieved when processing line",lnum2,' Please check possible warnings above and retry the FW upload process.'
-        sys.exit(5)
-      # in case that the done command is detected, than finish
-      if line[7:9]=='01':
-        break
-      lnum2+=1
-      # show the update progress and show percentages of the process ssometimes
-      if lnum2%lnumx==0:
-        print ' '+str(round(float(100*lnum2/lnum)))+'% ',
-      else:
-        if lrcnt>80: 
-          sys.stdout.write('*')
-        elif lrcnt>60: 
-          sys.stdout.write('*')
-        elif lrcnt>40: 
-          sys.stdout.write('*')
-        elif lrcnt>20: 
-          sys.stdout.write('*')
-        else: 
-          sys.stdout.write('*')
-          
-      sys.stdout.flush()
-    print ' Done uploading...'
-    # close the FW file 
-    f.close()
+def r232_state():
+   time.sleep(0.1)
+   data = i2c.read_byte_data(0x6b, 0x02)
+   if (data == 0x00):
+      return "OFF"
+   elif (data == 0x01):
+      return "ON @ 4800 pbs"
+   elif (data == 0x02):
+      return "ON @ 9600 pbs"
+   elif (data == 0x03):
+      return "ON @ 19200 pbs"
+   elif (data == 0x04):
+      return "ON @ 34600 pbs"
+   elif (data == 0x05):
+      return "ON @ 57600 pbs"
+   elif (data == 0x0f):
+      return "ON @ 115200 pbs"
+   else:
+      return "ERROR"
 
-  """
-  6) Perform factory reset of the PIco
-        
-  """
-  def factory_reset(self):
-    print "Invoking factory reset of PIco..."
-    time.sleep(1)
-    status=False
-    # Set up the connection to the PIco
-    PIco = self.serial.Serial(port=self.port,baudrate=9600,timeout=0.001,rtscts=0,xonxoff=True)
-    # empty the input buffer
-    for line in PIco:
-      pass
-    print 'send factory reset command ...'
-    time.sleep(1)
-    i2c.write_byte_data(0x6b, 0x00, 0xdd) 
-     #close the channel to PIco
-    PIco.close()
-    print 'ALL Done :) Ready to go...'
+print " "
+print "***********************************"
+print "      UPS CASI HV3.0A Status       "
+print "***********************************"
+print " "
+print " ","UPS PIco Firmware.......:",fw_version()
+print " ","UPS PIco Bootloader.....:",boot_version()
+print " ","UPS PIco PCB Version....:",pcb_version()
+print " ","UPS PIco BAT Version....:",bat_version()
+print " ","UPS PIco BAT Runtime....:",bat_runtime()
+print " ","UPS PIco r232 State.....:",r232_state()
+print " "
+print " ","Powering Mode...........:",pwr_mode()
+print " ","BAT Percentage..........:",bat_percentage(),"%"
+print " ","BAT Voltage.............:",bat_level(),"V"
+print " ","RPi Voltage.............:",rpi_level(),"V"
 
-  
-  def usage(self):
-    print "\n",sys.argv[0],' -f <fw_file> [ -v | -h | --force | -s | -p serial | -b i2c_bus_number ]',"\n"
-    sys.exit(1)
+if (degrees == "C"):
+   print " ","NTC1 Temperature........:",ntc1_temp(),"C"
+   print " ","TO-92 Temperature.......:",to92_temp(),"C"
+elif (degrees == "F"):
+   print " ","NTC1 Temperature........:",ntc1_temp(),"F"
+   print " ","TO-92 Temperature.......:",to92_temp(),"F"
+else:
+   print " ","NTC1 Temperature........: please set your desired temperature symbol!"
+   print " ","TO-92 Temperature.......: please set your desired temperature symbol!"
 
-
-if __name__ == "__main__":
-  FWUpdate()	
-
-
+print " ","Extended Voltage........:",epr_read(),"V"
+print " ","A/D2 Voltage............:",ad2_read(),"V"
+print " "
+print " ","PIco FAN Mode...........:",fan_mode()
+print " ","PIco FAN State..........:",fan_state()
+print " ","PIco FAN Speed..........:",fan_speed(),"%"
+print " ","Pico FAN Temp Threshhold:",fttemp(),"C"
+print " "
+print "***********************************"
+print "         Powered by CASI        "
+print "***********************************"
+print " "
