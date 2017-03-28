@@ -1,20 +1,9 @@
 #!/usr/bin/python
 
 #####################################################################################
-# pico_status.py
-# author : Kyriakos Naziris
-# updated: 1-12-2017
-# Script to show you some statistics pulled from your UPS PIco HV3.0A
-
-# -*- coding: utf-8 -*-
-# improved and completed by PiModules Version 1.0 29.08.2015
-# picoStatus-v3.py by KTB is based on upisStatus.py by Kyriakos Naziris
-# Kyriakos Naziris / University of Portsmouth / kyriakos@naziris.co.uk
-# As per 09-01-2017 improved and modified for PiModules PIco HV3.0A Stack Plus / Plus / Top by Siewert Lameijer
-#####################################################################################
-
-# You can install psutil using: sudo pip install psutil
-#import psutil
+# pico_status_hv3.0.py
+# updated: 20-01-2017
+# Script to show you some statistics pulled from your UPS CASI HV3.0A
 
 #####################################################################################
 # SETTINGS
@@ -23,22 +12,10 @@
 # Set your desired temperature symbol
 # C = Celsius
 # F = Fahrenheit
-degrees = "C or F"
-
-# Do you have a PIco FAN kit installed?
-# True or False
-fankit = True
-
-# Do you have a to92 temp sensor installed?
-# True or False
-to92 = True
-
-# Do you have extended power?
-# True or False
-extpwr = False
+degrees = "F"
 
 #####################################################################################
-# It's not necessary to edit anything below, unless you're knowing what to do!
+# It's not necessary to edit anything below this line unless your knowing what to do!
 #####################################################################################
 
 import smbus
@@ -52,7 +29,7 @@ def fw_version():
    data = i2c.read_byte_data(0x69, 0x26)
    data = format(data,"02x")
    return data
-   
+
 def boot_version():
    time.sleep(0.1)
    data = i2c.read_byte_data(0x69, 0x25)
@@ -63,7 +40,7 @@ def pcb_version():
    time.sleep(0.1)
    data = i2c.read_byte_data(0x69, 0x24)
    data = format(data,"02x")
-   return data    
+   return data
 
 def pwr_mode():
    data = i2c.read_byte_data(0x69, 0x00)
@@ -71,11 +48,11 @@ def pwr_mode():
    if (data == 1):
       return "RPi POWERED"
    elif (data == 2):
-      return "BATT POWERED"
+      return "BAT POWERED"
    else:
       return "ERROR"
-	  
-def batt_version():
+
+def bat_version():
    time.sleep(0.1)
    data = i2c.read_byte_data(0x6b, 0x07)
    if (data == 0x46):
@@ -85,80 +62,61 @@ def batt_version():
    elif (data == 0x53):
       return "LiPO (ASCII: S)"
    elif (data == 0x50):
-      return "LiPO (ASCII: P)"       
+      return "LiPO (ASCII: P)"
    else:
       return "ERROR"
-	  
-def batt_runtime():
+
+def bat_runtime():
    time.sleep(0.1)
    data = i2c.read_byte_data(0x6b, 0x01) + 1
    if (data == 0x100):
       return "TIMER DISABLED"
    elif (data == 0xff):
-      return "TIMER DISABLED"	  
+      return "TIMER DISABLED"
    else:
       data = str(data)+ " MIN"
-      return data	  
-   
-def batt_level():
+      return data
+
+def bat_level():
    time.sleep(0.1)
    data = i2c.read_word_data(0x69, 0x08)
    data = format(data,"02x")
    return (float(data) / 100)
-   
-def batt_percentage():
+
+def bat_percentage():
    time.sleep(0.1)
-   datavolts = batt_level()
-   databattery = batt_version()
+   datavolts = bat_level()
+   databattery = bat_version()
    if (databattery == "LiFePO4 (ASCII : F)") or (databattery == "LiFePO4 (ASCII : Q)"):
-		datapercentage = ((datavolts-2.8)/0.5)*100
-		
+      datapercentage = ((datavolts-2.9)/0.8)*100
+
    elif (databattery == "LiPO (ASCII: S)") or (databattery == "LiPO (ASCII: P)"):
-		datapercentage = ((datavolts-3.4)/0.75)*100
-   return int (datapercentage)
-   
-   
-def charger_state():
-   time.sleep(0.1)
-   data = i2c.read_byte_data(0x69, 0x20)
-   battpercentage = batt_percentage() 
-   powermode = pwr_mode()
-   if (data == 0x00) and (powermode == "BATT POWERED") and (battpercentage < 99):
-      return "DISCHARGING"   
-   elif (data == 0x01) and (powermode == "RPi POWERED") and (battpercentage > 99):
-      return "CHARGED" 	 
-   elif (data == 0x01) and (powermode == "RPi POWERED") and (battpercentage < 99):
-      return "CHARGING" 	  
-   else:
-      return "ERROR"   
+      datapercentage = ((datavolts-3.4)/0.75)*100
+   return datapercentage
 
 def rpi_level():
    time.sleep(0.1)
    data = i2c.read_word_data(0x69, 0x0a)
    data = format(data,"02x")
-   powermode = pwr_mode()
-   if (powermode == "RPi POWERED"):
-		return (float(data) / 100)
-   else:
-		return "0.0"
-		
+   return (float(data) / 100)
+
 def ntc1_temp():
    time.sleep(0.1)
    data = i2c.read_byte_data(0x69, 0x1b)
    data = format(data,"02x")
    if (degrees == "C"):
-	return data
+      return data
    elif (degrees == "F"):
-	return (float(data) * 9 / 5) + 32
-	
+      return (float(data) * 9 / 5) + 32
+
 def to92_temp():
    time.sleep(0.1)
    data = i2c.read_byte_data(0x69, 0x1C)
    data = format(data,"02x")
    if (degrees == "C"):
-	return data
+      return data
    elif (degrees == "F"):
-	return (float(data) * 9 / 5) + 32
+      return (float(data) * 9 / 5) + 32
 
 def epr_read():
    time.sleep(0.1)
@@ -168,7 +126,7 @@ def epr_read():
 
 def ad2_read():
    time.sleep(0.1)
-   data = i2c.read_word_data(0x69, 0x07)
+   data = i2c.read_word_data(0x69, 0x14)
    data = format(data,"02x")
    return (float(data) / 100)
    
@@ -180,11 +138,19 @@ def fan_mode():
       return "ENABLED"
    elif (data == 0):
       return "DISABLED"
+   elif (data == 2):
+     return "AUTOMATIC"
    else:
-      return "ERROR" 
+      return "ERROR"
+
+def fttemp():
+   time.sleep(0.1)
+   data = i2c.read_byte_data(0x6b, 0x14)
+   data = format(data,"02x")
+   return data
 
 def fan_state():
-   time.sleep(0.1)  
+   time.sleep(0.1)
    data = i2c.read_byte_data(0x6b, 0x13)
    data = data & ~(1 << 2)
    if (data == 1):
@@ -192,21 +158,19 @@ def fan_state():
    elif (data == 0):
       return "OFF"
    else:
-      return "ERROR" 	  
+      return "ERROR"
 
 def fan_speed():
    time.sleep(0.1)
-   data = i2c.read_byte_data(0x6b, 0x12)
+   data = i2c.read_word_data(0x6b, 0x12)
    data = format(data,"02x")
-   return int (float(data) * 100)
+   return int(data, 16)
 
-def rs232_state():
-   time.sleep(0.1)  
+def r232_state():
+   time.sleep(0.1)
    data = i2c.read_byte_data(0x6b, 0x02)
    if (data == 0x00):
       return "OFF"
-   elif (data == 0xff):
-      return "OFF"	  
    elif (data == 0x01):
       return "ON @ 4800 pbs"
    elif (data == 0x02):
@@ -218,52 +182,46 @@ def rs232_state():
    elif (data == 0x05):
       return "ON @ 57600 pbs"
    elif (data == 0x0f):
-      return "ON @ 115200 pbs"	  
+      return "ON @ 115200 pbs"
    else:
-      return "ERROR"   
-   
-print " "
-print "**********************************************"
-print "*      	    UPS PIco HV3.0A Status           *"
-print "*      	         Version 5.0                 *"
-print "**********************************************"
-print " "
-print " ","UPS PIco Firmware.....:",fw_version()
-print " ","UPS PIco Bootloader...:",boot_version()
-print " ","UPS PIco PCB Version..:",pcb_version()
-print " ","UPS PIco BATT Version.:",batt_version()
-print " ","UPS PIco BATT Runtime.:",batt_runtime()
-print " ","UPS PIco rs232 State..:",rs232_state()
-print " "
-print " ","Powering Mode.........:",pwr_mode()
-print " ","Charger State.........:",charger_state()
-print " ","Battery Percentage....:",batt_percentage(),"%"
-print " ","Battery Voltage.......:",batt_level(),"V"
-print " ","RPi Voltage...........:",rpi_level(),"V" 
+      return "ERROR"
 
-if (to92 == True):
-	if (degrees == "C"):
-		print " ","NTC1 Temperature......:",ntc1_temp(),"C"
-		print " ","TO-92 Temperature.....:",to92_temp(),"C"
-	elif (degrees == "F"):
-		print " ","NTC1 Temperature......:",ntc1_temp(),"F"
-		print " ","TO-92 Temperature.....:",to92_temp(),"F"
-	else:
-		print " ","NTC1 Temperature......: please set your desired temperature symbol!"
-		print " ","TO-92 Temperature.....: please set your desired temperature symbol!"
-
-if (extpwr == True):	
-	print " ","Extended Voltage......:",epr_read(),"V"
-	print " ","A/D2 Voltage..........:",ad2_read(),"V"
-
-if (fankit == True):		
-	print " "
-	print " ","UPS PIco FAN Mode.....:",fan_mode()
-	print " ","UPS PIco FAN State....:",fan_state()
-	print " ","UPS PIco FAN Speed....:",fan_speed(),"RPM"
 print " "
-print "**********************************************"
-print "*           Powered by PiModules             *"
-print "**********************************************"
+print "***********************************"
+print "      UPS PIco HV3.0A Status       "
+print "***********************************"
 print " "
+print " ","UPS PIco Firmware.......:",fw_version()
+print " ","UPS PIco Bootloader.....:",boot_version()
+print " ","UPS PIco PCB Version....:",pcb_version()
+print " ","UPS PIco BAT Version....:",bat_version()
+print " ","UPS PIco BAT Runtime....:",bat_runtime()
+print " ","UPS PIco r232 State.....:",r232_state()
+print " "
+print " ","Powering Mode...........:",pwr_mode()
+print " ","BAT Percentage..........:",bat_percentage(),"%"
+print " ","BAT Voltage.............:",bat_level(),"V"
+print " ","RPi Voltage.............:",rpi_level(),"V"
 
+if (degrees == "C"):
+   print " ","NTC1 Temperature........:",ntc1_temp(),"C"
+   print " ","TO-92 Temperature.......:",to92_temp(),"C"
+elif (degrees == "F"):
+   print " ","NTC1 Temperature........:",ntc1_temp(),"F"
+   print " ","TO-92 Temperature.......:",to92_temp(),"F"
+else:
+   print " ","NTC1 Temperature........: please set your desired temperature symbol!"
+   print " ","TO-92 Temperature.......: please set your desired temperature symbol!"
+
+print " ","Extended Voltage........:",epr_read(),"V"
+print " ","A/D2 Voltage............:",ad2_read(),"V"
+print " "
+print " ","PIco FAN Mode...........:",fan_mode()
+print " ","PIco FAN State..........:",fan_state()
+print " ","PIco FAN Speed..........:",fan_speed(),"%"
+print " ","Pico FAN Temp Threshhold:",fttemp(),"C"
+print " "
+print "***********************************"
+print "         Powered by CASI           "
+print "***********************************"
+print " "
